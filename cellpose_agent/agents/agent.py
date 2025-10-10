@@ -1,0 +1,79 @@
+"""
+
+"""
+import torch
+from datetime import datetime
+from smolagents import ToolCallingAgent, TransformersModel
+from langfuse import get_client, observe
+from transformers import BitsAndBytesConfig
+
+from config import settings
+from utils.gpu import clear_gpu_cache
+from tools import all_tools
+
+langfuse = get_client()
+
+class CellposeAgent:
+    def __init__(self):
+        self.instructions = """
+        You are a cellpose-sam segmentation assistant.
+        - For image segmentation: use get_segmentation_parameters.
+        - For "what is X": use search_documentation_vector.
+        - For "how does X affect Y": use search_knowledge_graph.
+        - For complex analysis: use hybrid_search.
+        - To explore parameter interactions: use get_parameter_relationships.
+        Keep responses concise and actionable.
+        """
+        self.model = self._initialize_model()
+        self.agent = self._create_agent()
+        
+
+    def _initialize_model(self):
+        """Initializes the TransformersModel for the agent."""
+        clear_gpu_cache()
+
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+        )        
+        
+        return TransformersModel(
+            model_id=settings.AGENT_MODEL_ID,
+            device_map="auto",
+            torch_dtype=torch.float32,
+            model_kwargs={
+                "quantization_config": quantization_config
+            }
+        )
+
+    def _create_agent(self):
+        """Creates the ToolCallingAgent with all available tools."""
+        return ToolCallingAgent(
+            model=self.model,
+            tools=all_tools,
+            instructions=self.instructions,
+            max_steps=10,
+        )
+
+    @observe()
+    def run(self, task: str):
+        """Runs the agent on a given task with Langfuse tracing."""
+        print(f"\n{'='*60}\nTASK: {task}\n{'='*60}")
+        
+        langfuse.update_current_trace(
+            input={"task": task},
+            user_id="user_001",
+            tags=["rag", "cellpose", "knowledge-graph"],
+            metadata={"agent_type": "ToolCallingAgent", "model_id": settings.AGENT_MODEL_ID}
+        )
+
+        try:
+            final_answer = self.agent.run(task)
+            print("\n--- Final Answer from Agent ---\n", final_answer)
+            langfuse.update_current_trace(output={"final_answer": final_answer})
+            return final_answer
+        except Exception as e:
+            print(f"Agent run failed: {e}")
+            langfuse.update_current_trace(output={"error": str(e)})
+            raise
+        finally:
+            clear_gpu_cache()
