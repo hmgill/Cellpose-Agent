@@ -14,10 +14,10 @@ from transformers import BitsAndBytesConfig
 
 
 # --- Environment & Paths ---
-NEO4J_URI = os.getenv("NEO4J_URI", "neo4j+s://8d0af37b.databases.neo4j.io")
-NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "b5zqfnglm_CWHVYpmuXBR8oDyjaOqvT17L8pBUnfUJ0")
-NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
+NEO4J_URI = os.getenv("NEO4J_URI")
+NEO4J_USERNAME = os.getenv("NEO4J_USERNAME")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
+NEO4J_DATABASE = os.getenv("NEO4J_DATABASE")
 CHROMA_DB_PATH = "./rag/cellpose_db/"
 
 
