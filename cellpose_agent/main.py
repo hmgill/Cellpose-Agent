@@ -27,7 +27,7 @@ def run_agent_tasks():
     agent = CellposeAgent()
     
     tasks = [
-        "What does cellpose flow threshold control?",
+        "What parameters would work best for my image site_image.png?",
     ]
 
     for task in tasks:
