@@ -1,9 +1,10 @@
 """
-Segmentation tools for cellpose-sam pipeline
+Segmentation tools for cellpose-sam pipeline, optimized for smol-agents with image caching.
 """
 import base64
 import json
 import re
+from typing import Any, Dict, TYPE_CHECKING
 import numpy as np
 import cv2
 import torch
@@ -16,9 +17,21 @@ from smolagents import tool
 from langfuse import get_client
 from stores import chroma_store
 from models.embeddings import get_image_embedding
+from utils.image_utils import resize_and_encode_image
 
+# The TYPE_CHECKING block is for static type checkers (like mypy).
+# It helps them understand the intended type is a smol-agent,
+# but it is not executed at runtime, thus avoiding import errors.
+if TYPE_CHECKING:
+    from smolagents.agent import BaseAgent
 
 langfuse = get_client()
+
+# --- Global State and Caching ---
+
+# In-memory cache to store loaded images (base64 encoded) by their path.
+# This avoids reloading the same image in subsequent tool calls within the same agent run.
+_image_cache: Dict[str, tuple[str, str]] = {}
 
 # Initialize models once (singleton pattern)
 _cellpose_model = None
@@ -45,6 +58,19 @@ def get_sam_predictor():
         print("✓ SAM predictor initialized")
     return _sam_predictor
 
+def _get_cached_image(image_path: str) -> tuple[str, str] | None:
+    """Helper to retrieve an image from the cache."""
+    if image_path in _image_cache:
+        print(f"Found image in cache: '{image_path}'")
+        return _image_cache[image_path]
+    return None
+
+def _load_and_cache_image(image_path: str) -> tuple[str, str]:
+    """Helper to load, encode, and cache an image."""
+    print(f"Loading and caching image: '{image_path}'")
+    image_base64, media_type = resize_and_encode_image(image_path)
+    _image_cache[image_path] = (image_base64, media_type)
+    return image_base64, media_type
 
 def parse_parameters_from_text(param_text: str) -> dict:
     """
@@ -86,35 +112,24 @@ def parse_parameters_from_text(param_text: str) -> dict:
 
 
 @tool
-def get_segmentation_parameters(image_path: str) -> str:
+def get_segmentation_parameters(image_path: str, agent: Any = None) -> str:
     """
     Finds the best cellpose-sam segmentation parameters for an image using vector similarity.
-    Returns both a text recommendation and structured parameter data.
+    Returns both a text recommendation and the resized image for VLM viewing.
     
     Args:
         image_path (str): Path to the image file to segment.
+        agent (Any, optional): The agent instance, passed automatically by smol-agents.
     Returns:
-        str: JSON string containing recommended parameters and analysis context
+        str: JSON string containing recommended parameters, analysis context, and base64 image
     """
     print(f"\n--- TOOL CALLED: get_segmentation_parameters for '{image_path}' ---")
 
-    # Read image once and reuse
     try:
-        with open(image_path, "rb") as image_file:
-            image_bytes = image_file.read()
-            
-        image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-        
-        # Determine media type
-        if image_path.lower().endswith('.png'):
-            media_type = "image/png"
-        elif image_path.lower().endswith(('.jpg', '.jpeg')):
-            media_type = "image/jpeg"
-        else:
-            media_type = "image/png"
-            
+        # Check cache first, otherwise load and cache the image
+        image_base64, media_type = _get_cached_image(image_path) or _load_and_cache_image(image_path)
     except Exception as e:
-        print(f"Warning: Could not read image: {e}")
+        print(f"Warning: Could not read/resize image: {e}")
         return json.dumps({"error": f"Could not read image: {e}"})
 
     try:
@@ -183,10 +198,12 @@ def get_segmentation_parameters(image_path: str) -> str:
             confidence = "low"
             confidence_note = "No very similar images found. Parameters may need significant adjustment based on visual inspection."
 
-        # Return structured JSON response
+        # Return structured JSON response with image embedded
         response = {
             "status": "success",
             "image_path": image_path,
+            "image_base64": image_base64,
+            "image_media_type": media_type,
             "recommended_parameters": params,
             "matched_image": matched_image,
             "similarity_distance": float(distance),
@@ -217,12 +234,12 @@ def run_cellpose_sam(
     cellprob_threshold: float = None,
     min_size: int = None,
     output_path: str = None,
-    use_recommended_params: bool = True
+    use_recommended_params: bool = True,
+    agent: Any = None
 ) -> str:
     """
     Runs cellpose-sam segmentation pipeline on an image with specified parameters.
-    If use_recommended_params is True and no parameters are provided, will automatically
-    get recommended parameters for the image.
+    Returns results with both input and output images for VLM viewing.
     
     Args:
         image_path (str): Path to the image file to segment
@@ -232,16 +249,22 @@ def run_cellpose_sam(
         min_size (int): Minimum cell size in pixels (default: auto-detect or 15)
         output_path (str): Optional path to save the overlay image (default: auto-generated)
         use_recommended_params (bool): If True and params not provided, get recommendations (default: True)
+        agent (Any, optional): The agent instance, passed automatically by smol-agents.
     
     Returns:
-        str: Summary of segmentation results including cell count and output path
+        str: JSON string with segmentation results, input image, and output image
     """
     print(f"\n--- TOOL CALLED: run_cellpose_sam for '{image_path}' ---")
+    
+    try:
+        input_image_base64, input_media_type = _get_cached_image(image_path) or _load_and_cache_image(image_path)
+    except Exception as e:
+        return json.dumps({"error": f"Could not read input image: {e}"})
     
     # Auto-fetch recommended parameters if none provided
     if use_recommended_params and all(p is None for p in [diameter, flow_threshold, cellprob_threshold, min_size]):
         print("No parameters provided. Fetching recommended parameters...")
-        param_response = get_segmentation_parameters(image_path)
+        param_response = get_segmentation_parameters(image_path, agent=agent) # Pass agent along
         
         try:
             param_data = json.loads(param_response)
@@ -256,22 +279,22 @@ def run_cellpose_sam(
             else:
                 print(f"Could not get recommendations: {param_data.get('error', 'Unknown error')}")
                 print("Using default parameters...")
-                diameter = diameter or 25
-                flow_threshold = flow_threshold or 0.6
-                cellprob_threshold = cellprob_threshold or 0
-                min_size = min_size or 15
+                diameter = 25
+                flow_threshold = 0.6
+                cellprob_threshold = 0
+                min_size = 15
         except json.JSONDecodeError:
             print("Could not parse parameter recommendations. Using defaults...")
-            diameter = diameter or 25
-            flow_threshold = flow_threshold or 0.6
-            cellprob_threshold = cellprob_threshold or 0
-            min_size = min_size or 15
+            diameter = 25
+            flow_threshold = 0.6
+            cellprob_threshold = 0
+            min_size = 15
     else:
         # Use provided values or defaults
-        diameter = diameter or 25
-        flow_threshold = flow_threshold or 0.6
-        cellprob_threshold = cellprob_threshold or 0
-        min_size = min_size or 15
+        diameter = diameter if diameter is not None else 25
+        flow_threshold = flow_threshold if flow_threshold is not None else 0.6
+        cellprob_threshold = cellprob_threshold if cellprob_threshold is not None else 0
+        min_size = min_size if min_size is not None else 15
     
     print(f"Final parameters: diameter={diameter}, flow_threshold={flow_threshold}, "
           f"cellprob_threshold={cellprob_threshold}, min_size={min_size}")
@@ -280,7 +303,7 @@ def run_cellpose_sam(
         # Read image once
         img = cv2.imread(image_path)
         if img is None:
-            return f"Error: Could not read image at {image_path}"
+            return json.dumps({"error": f"Could not read image at {image_path}"})
         
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         
@@ -299,7 +322,18 @@ def run_cellpose_sam(
         )
         
         if masks_cellpose.max() == 0:
-            return "No cells detected. Try adjusting parameters (lower flow_threshold or cellprob_threshold)."
+            return json.dumps({
+                "status": "no_cells_detected",
+                "message": "No cells detected. Try adjusting parameters (lower flow_threshold or cellprob_threshold).",
+                "input_image_base64": input_image_base64,
+                "input_image_media_type": input_media_type,
+                "parameters": {
+                    "diameter": diameter,
+                    "flow_threshold": flow_threshold,
+                    "cellprob_threshold": cellprob_threshold,
+                    "min_size": min_size
+                }
+            })
         
         print(f"Cellpose detected {masks_cellpose.max()} regions")
         
@@ -337,21 +371,29 @@ def run_cellpose_sam(
             output_path = f"{base_name}_cellpose_sam_overlay.png"
         
         # Save results
-        cv2.imwrite(output_path, colored_overlay.astype(np.uint8))
+        cv2.imwrite(output_path, cv2.cvtColor(colored_overlay.astype(np.uint8), cv2.COLOR_RGB2BGR))
         
-        # Log to Langfuse
+        # Load and cache the newly created output image
+        output_image_base64, output_media_type = _load_and_cache_image(output_path)
+        
+        # Log to Langfuse with both images
         try:
-            # Encode output image
-            with open(output_path, "rb") as f:
-                output_base64 = base64.b64encode(f.read()).decode('utf-8')
-            
             langfuse.update_current_trace(
+                input={
+                    "image_path": image_path,
+                    "input_image": {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{input_media_type};base64,{input_image_base64}"
+                        }
+                    }
+                },
                 output={
                     "cell_count": int(masks_cellpose.max()),
                     "output_image": {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:image/png;base64,{output_base64}"
+                            "url": f"data:{output_media_type};base64,{output_image_base64}"
                         }
                     },
                     "output_path": output_path
@@ -368,17 +410,127 @@ def run_cellpose_sam(
         except Exception as log_error:
             print(f"Warning: Could not log output to Langfuse: {log_error}")
         
-        result = f"""
-        Segmentation Complete!
-        - Detected cells: {masks_cellpose.max()}
-        - Output saved to: {output_path}
-        - Parameters used:
-        • diameter: {diameter}
-        • flow_threshold: {flow_threshold}
-        • cellprob_threshold: {cellprob_threshold}
-        • min_size: {min_size}
-        """
-        return result.strip()
+        # Return structured JSON with both images
+        result = {
+            "status": "success",
+            "cell_count": int(masks_cellpose.max()),
+            "output_path": output_path,
+            "input_image_base64": input_image_base64,
+            "input_image_media_type": input_media_type,
+            "output_image_base64": output_image_base64,
+            "output_image_media_type": output_media_type,
+            "parameters": {
+                "diameter": diameter,
+                "flow_threshold": flow_threshold,
+                "cellprob_threshold": cellprob_threshold,
+                "min_size": min_size
+            },
+            "summary": f"Detected {masks_cellpose.max()} cells. Output saved to: {output_path}"
+        }
+        
+        return json.dumps(result, indent=2)
         
     except Exception as e:
-        return f"Error during segmentation: {e}"
+        return json.dumps({"error": f"Error during segmentation: {e}"})
+
+
+@tool
+def refine_segmentation(
+    original_image_path: str,
+    segmentation_output_path: str,
+    current_parameters: dict,
+    agent: Any = None,
+) -> str:
+    """
+    Provides original and segmented images for visual analysis to determine if refinement is needed.
+    
+    Use this tool after run_cellpose_sam to check segmentation quality. The tool returns
+    both images and current parameters for you to visually assess the results.
+    
+    Before calling this tool, consider using search_knowledge_graph or hybrid_search to
+    refresh your understanding of how cellpose parameters affect segmentation:
+    - flow_threshold: controls cell boundary detection (lower = more permissive)
+    - cellprob_threshold: controls cell probability cutoff (lower = more cells detected)
+    - diameter: expected cell size in pixels
+    - min_size: minimum object size to keep
+    
+    After visual analysis, use your knowledge to decide if parameters should be adjusted.
+    Common issues:
+    - Under-segmentation (cells merged): decrease flow_threshold or diameter
+    - Over-segmentation (cells fragmented): increase flow_threshold or min_size
+    - Too few cells: decrease cellprob_threshold or flow_threshold
+    - Too many false positives: increase cellprob_threshold or min_size
+    
+    Args:
+        original_image_path: Path to the original input image
+        segmentation_output_path: Path to the segmented overlay image
+        current_parameters: Dict with current diameter, flow_threshold, cellprob_threshold, min_size
+        agent (Any, optional): The agent instance, passed automatically by smol-agents.
+    
+    Returns:
+        str: JSON string with base64-encoded images and current parameters for analysis
+    """
+    print(f"\n--- TOOL CALLED: refine_segmentation ---")
+    print(f"Original image: {original_image_path}")
+    print(f"Segmented image: {segmentation_output_path}")
+    print(f"Current parameters: {current_parameters}")
+    
+    try:
+        # Get both images from cache or load them if they're not present
+        original_b64, original_type = _get_cached_image(original_image_path) or _load_and_cache_image(original_image_path)
+        segmented_b64, segmented_type = _get_cached_image(segmentation_output_path) or _load_and_cache_image(segmentation_output_path)
+        
+        # Return structured data with embedded base64 images
+        result = {
+            "status": "ready_for_analysis",
+            "original_image": {
+                "path": original_image_path,
+                "base64": original_b64,
+                "media_type": original_type
+            },
+            "segmented_image": {
+                "path": segmentation_output_path,
+                "base64": segmented_b64,
+                "media_type": segmented_type
+            },
+            "current_parameters": current_parameters,
+            "note": "Visually compare the original and segmented images. Check for under-segmentation (masks do not meet cell boundaries) or over-segmentation (masks are excessively outside of cell boundaries). Use your RAG tools to understand how to adjust parameters if refinement is needed.",
+            "next_steps": "Analyze both images visually. If refinement is needed, call run_cellpose_sam again with adjusted parameters. If segmentation looks good, report success to the user."
+        }
+        
+        # Log to Langfuse with both images
+        try:
+            langfuse.update_current_trace(
+                input={
+                    "tool": "refine_segmentation",
+                    "original_image": {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{original_type};base64,{original_b64}"
+                        }
+                    },
+                    "segmented_image": {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{segmented_type};base64,{segmented_b64}"
+                        }
+                    },
+                    "current_parameters": current_parameters
+                },
+                metadata={
+                    "original_path": original_image_path,
+                    "segmented_path": segmentation_output_path
+                }
+            )
+        except Exception as log_error:
+            print(f"Warning: Could not log to Langfuse: {log_error}")
+        
+        return json.dumps(result, indent=2)
+        
+    except Exception as e:
+        error_result = {
+            "status": "error",
+            "error": str(e),
+            "message": "Could not load images for refinement analysis. Please check that both file paths are valid."
+        }
+        return json.dumps(error_result, indent=2)
