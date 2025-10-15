@@ -1,0 +1,22 @@
+GPU 0 (Tesla V100-PCIE-32GB): 26.97GB / 31.73GB (85% limit)
+GPU 1 (Tesla V100-PCIE-32GB): 26.97GB / 31.73GB (85% limit)
+✓ Total GPU memory available for models: 53.95GB
+✓ CPU offload memory: 50GB
+
+
+Welcome to CellposeSAM, cellpose v
+cellpose version: 	4.0.6 
+platform:       	linux 
+python version: 	3.11.5 
+torch version:  	2.8.0+cu128! The neural network component of
+CPSAM is much larger than in previous versions and CPU excution is slow. 
+We encourage users to use GPU/MPS if available. 
+
+
+
+--- Agent Execution Mode ---
+✓ Observability and instrumentation initialized.
+✓ Configuring LlamaIndex settings...
+✓ LlamaIndex configured to use local Embedding Model and LLM.
+✓ Knowledge graph is ready with 72 nodes.
+✓ GPU cache cleared.

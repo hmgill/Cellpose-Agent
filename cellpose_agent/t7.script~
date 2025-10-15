@@ -1,0 +1,27 @@
+#!/bin/bash
+
+#SBATCH -p hopper
+#SBATCH -J ginkgo 
+#SBATCH -o t7.txt
+#SBATCH -e t7.err
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gpus-per-node=3
+#SBATCH --mem=400G
+#SBATCH --time=00:50:00
+
+#SBATCH -A r00270
+
+module load python/gpu/3.11.5
+
+cd /N/project/retinal_images/ginkgo/scripts/cellpose_agent/
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512
+export CUDA_LAUNCH_BLOCKING=0
+
+python3 main.py
+
+#python3 main.py --build-kg
+#python3 test.py
+#python3 ingest_rag_data.py
+
