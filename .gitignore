@@ -1,2 +1,3 @@
 *.env
 *~
+cellpose_agent/rag/cellpose_db/
