@@ -14,35 +14,31 @@ from transformers import BitsAndBytesConfig
 
 from utils.gpu import get_max_memory
 
-MAX_MEMORY = get_max_memory(memory_fraction=0.85, cpu_memory="50GB")
-
 # --- Environment & Paths ---
 NEO4J_URI = os.getenv("NEO4J_URI", "neo4j+s://8d0af37b.databases.neo4j.io")
 NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "b5zqfnglm_CWHVYpmuXBR8oDyjaOqvT17L8pBUnfUJ0")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
-
 CHROMA_DB_PATH = "./rag/cellpose_db/"
-
-
-# --- Model Identifiers ---
-EMBEDDING_MODEL_ID = 'clip-ViT-B-32'
-
-
-SAFETY_AGENT_MODEL_ID = "/N/project/retinal_images/hub/models--google--shieldgemma-2-4b-it/snapshots/eaf60452b5fc41a911338a022e628b0c15283897/"
-AGENT_MODEL_ID = "/N/project/retinal_images/hub/models--google--gemma-3-12b-it/snapshots/96b6f1eccf38110c56df3a15bffe176da04bfd80/"
 
 
 # --- HF TOKEN ---
 HF_TOKEN = os.getenv("HF_TOKEN")
 
 
+# --- Model Identifiers ---
+EMBEDDING_MODEL_ID = 'clip-ViT-B-32'
+SAFETY_AGENT_MODEL_ID = "/N/project/retinal_images/hub/models--google--shieldgemma-2-4b-it/snapshots/eaf60452b5fc41a911338a022e628b0c15283897/"
+CELLPOSE_AGENT_MODEL_ID = "/N/project/retinal_images/hub/models--google--gemma-3-12b-it/snapshots/96b6f1eccf38110c56df3a15bffe176da04bfd80/"
+MANAGER_AGENT_MODEL_ID = "/N/project/retinal_images/hub/models--google--gemma-3-12b-it/snapshots/96b6f1eccf38110c56df3a15bffe176da04bfd80/"
+
+
+
+
 # --- LlamaIndex Global Settings ---
 def configure_llama_index():
     """
     Configures global LlamaIndex settings for the embedding model and the LLM.
-    This function ensures that all parts of LlamaIndex use our specified local models
-    instead of defaulting to OpenAI.
     """
     print("✓ Configuring LlamaIndex settings...")
 
@@ -59,8 +55,8 @@ def configure_llama_index():
     )
     
     llm = HuggingFaceLLM(
-        model_name=AGENT_MODEL_ID,
-        tokenizer_name=AGENT_MODEL_ID,
+        model_name=CELLPOSE_AGENT_MODEL_ID,
+        tokenizer_name=CELLPOSE_AGENT_MODEL_ID,
         query_wrapper_prompt=query_wrapper_prompt,
         device_map="auto",
         model_kwargs={
@@ -70,14 +66,6 @@ def configure_llama_index():
     )
     
     Settings.llm = llm
-
-    """
-    HuggingFaceInferenceAPI(
-        model_name="mistralai/Mistral-7B-Instruct-v0.2",
-        token = HF_TOKEN,
-        provider = "auto"
-    )
-    """
 
     Settings.embed_model = HuggingFaceEmbedding(
         model_name=f"sentence-transformers/{EMBEDDING_MODEL_ID}"

@@ -165,7 +165,7 @@ class CellposeAgent:
         )        
         
         return TransformersModel(
-            model_id=settings.AGENT_MODEL_ID,
+            model_id=settings.CELLPOSE_AGENT_MODEL_ID,
             device_map="auto",
             torch_dtype=torch.float32,
             model_kwargs={
@@ -178,35 +178,13 @@ class CellposeAgent:
         """Creates the ToolCallingAgent with all available tools and memory management."""
         return ToolCallingAgent(
             model=self.model,
-            tools=all_tools,
+            tools=cellpose_tools,
             instructions=self.instructions,
             max_steps=10,
             step_callbacks=[
                 self.attach_images_callback,
                 self.manage_image_memory,
-            ]
+            ],
+            name="cellpose_agent",
+            description="Performs cell segmentation using cellpose-sam and provides parameter recommendations."
         )
-
-    @observe()
-    def run(self, task: str):
-        """Runs the agent on a given task with Langfuse tracing."""
-        print(f"\n{'='*60}\nTASK: {task}\n{'='*60}")
-        
-        langfuse.update_current_trace(
-            input={"task": task},
-            user_id="user_001",
-            tags=["rag", "cellpose", "knowledge-graph", "vision"],
-            metadata={"agent_type": "ToolCallingAgent", "model_id": settings.AGENT_MODEL_ID}
-        )
-
-        try:
-            final_answer = self.agent.run(task)
-            print("\n--- Final Answer from Agent ---\n", final_answer)
-            langfuse.update_current_trace(output={"final_answer": final_answer})
-            return final_answer
-        except Exception as e:
-            print(f"Agent run failed: {e}")
-            langfuse.update_current_trace(output={"error": str(e)})
-            raise
-        finally:
-            clear_gpu_cache()

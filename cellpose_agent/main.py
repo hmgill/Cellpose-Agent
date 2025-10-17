@@ -1,5 +1,5 @@
 """
-
+Multi-agent cellpose segmentation system with manager coordination
 """
 
 import sys
@@ -8,9 +8,8 @@ from langfuse import get_client
 from openinference.instrumentation.smolagents import SmolagentsInstrumentor
 
 from config import settings
-from agents.agent import CellposeAgent
+from agents.manager_agent import ManagerAgent
 from stores import neo4j_store
-
 
 
 def setup_observability():
@@ -19,20 +18,26 @@ def setup_observability():
     SmolagentsInstrumentor().instrument()
     print("✓ Observability and instrumentation initialized.")
 
-
     
-def run_agent_tasks():
-    """Initializes and runs the agent against a predefined list of tasks."""
+def run_manager_tasks():
+    """Initializes and runs the manager agent with predefined tasks."""
 
-    agent = CellposeAgent()
+    manager = ManagerAgent()
     
     tasks = [
-        "What parameters would work best for my image site_image.png?",
+        {
+            "query": "What parameters would work best for my image site_image.png?",
+            "image_path": "site_image.png"
+        },
     ]
 
     for task in tasks:
         try:
-            agent.run(task)
+            query = task["query"]
+            image_path = task.get("image_path")
+                        
+            manager.run(task=query, image_path=image_path)
+            
         except Exception as e:
             print(f"An error occurred while processing the task: '{task}'. Error: {e}")
 
@@ -45,10 +50,10 @@ def main():
     """
     Main entry point for the application.
     Use '--build-kg' to populate the knowledge graph.
-    Run without arguments to start the agent.
+    Run without arguments to start the multi-agent system.
     """
     parser = argparse.ArgumentParser(
-        description="A RAG agent for cellpose-sam segmentation. Use --build-kg for first-time setup."
+        description="A multi-agent RAG system for cellpose-sam segmentation. Use --build-kg for first-time setup."
     )
     parser.add_argument(
         '--build-kg',
@@ -68,8 +73,8 @@ def main():
             print(f"\n❌ An error occurred during knowledge graph creation: {e}")
         sys.exit(0)
 
-    # --- Mode 2: Run the Agent (Default) ---
-    print("\n--- Agent Execution Mode ---")
+    # --- Mode 2: Run the Multi-Agent System (Default) ---
+    print("\n--- Multi-Agent System Execution Mode ---")
     setup_observability()
     settings.configure_llama_index()
 
@@ -86,8 +91,8 @@ def main():
         print(f"❌ FATAL ERROR: Could not connect to or verify Neo4j: {e}")
         sys.exit(1)
 
-    # If prerequisites are met, run the agent
-    run_agent_tasks()
+    # If prerequisites are met, run the manager
+    run_manager_tasks()
 
 
 if __name__ == "__main__":
